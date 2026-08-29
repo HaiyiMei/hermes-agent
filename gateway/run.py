@@ -10596,6 +10596,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         msg = f"⚠️ Gateway {action} — {hint}"
 
         notified: set[tuple[str, str, Optional[str]]] = set()
+        notified_slack_dm_parents: set[tuple[str, str]] = set()
         for session_key in active:
             source = None
             try:
@@ -10617,6 +10618,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 platform_str = source.platform.value
                 chat_id = str(source.chat_id)
                 thread_id = source.thread_id
+                chat_type = source.chat_type
             else:
                 # Fall back to parsing the session key when no persisted
                 # origin is available (legacy sessions/tests).
@@ -10626,6 +10628,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 platform_str = _parsed["platform"]
                 chat_id = _parsed["chat_id"]
                 thread_id = _parsed.get("thread_id")
+                chat_type = _parsed.get("chat_type")
 
             # Deduplicate only identical delivery targets. Thread/topic-aware
             # platforms can share a parent chat while still routing to distinct
@@ -10679,6 +10682,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     continue
 
                 notified.add(dedup_key)
+                if platform is Platform.SLACK and chat_type == "dm":
+                    notified_slack_dm_parents.add((platform_str, chat_id))
                 logger.info(
                     "Sent shutdown notification to active chat %s:%s",
                     platform_str, chat_id,
@@ -10739,6 +10744,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
             dedup_key = (platform.value, str(home.chat_id), str(home.thread_id) if home.thread_id else None)
             if dedup_key in notified:
+                continue
+            if (
+                platform is Platform.SLACK
+                and (platform.value, str(home.chat_id)) in notified_slack_dm_parents
+            ):
+                logger.info(
+                    "Skipping duplicate home-channel shutdown notification for active Slack DM %s",
+                    home.chat_id,
+                )
                 continue
 
             try:

@@ -9,7 +9,7 @@ import pytest
 import gateway.run as gateway_run
 from gateway.config import HomeChannel, Platform, PlatformConfig
 from gateway.platforms.base import MessageEvent, MessageType, SendResult
-from gateway.session import build_session_key
+from gateway.session import SessionSource, build_session_key
 from tests.gateway.restart_test_helpers import (
     make_restart_runner,
     make_restart_source,
@@ -390,6 +390,36 @@ async def test_shutdown_notifications_use_cached_live_thread_source_when_origin_
         "⚠️ Gateway shutting down — Your current task will be interrupted.",
         metadata={"thread_id": "topic-7"},
     )
+
+
+@pytest.mark.asyncio
+async def test_shutdown_home_broadcast_deduplicates_active_slack_dm_parent():
+    runner, adapter = make_restart_runner()
+    source = SessionSource(
+        platform=Platform.SLACK,
+        chat_id="D42",
+        chat_type="dm",
+        user_id="U42",
+        thread_id="1700000000.000001",
+    )
+    session_key = build_session_key(source)
+
+    runner.config.platforms = {
+        Platform.SLACK: PlatformConfig(enabled=True, token="***")
+    }
+    runner.config.platforms[Platform.SLACK].home_channel = HomeChannel(
+        platform=Platform.SLACK,
+        chat_id="D42",
+        name="Slack Home",
+    )
+    runner.adapters = {Platform.SLACK: adapter}
+    runner._running_agents[session_key] = object()
+    runner.session_store._entries[session_key] = MagicMock(origin=source)
+    adapter.send = AsyncMock(return_value=SendResult(success=True, message_id="shutdown"))
+
+    await runner._notify_active_sessions_of_shutdown()
+
+    adapter.send.assert_awaited_once()
 
 
 @pytest.mark.asyncio
